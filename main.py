@@ -1,3 +1,4 @@
+from abc import get_cache_token
 from tokenize import Double
 import numpy as np
 import pandas as pd
@@ -8,11 +9,24 @@ import yfinance as yf
 import ta 
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
+import schedule
+import time
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoLatestQuoteRequest
+import os 
+
 
 import warnings
 warnings.filterwarnings("ignore")
 
+alpaca_api_key = os.environ['ALPACA_KEY']
+alpaca_api_secret = os.environ['ALPACA_SECRET']
 
+trading_client = TradingClient(alpaca_api_key, alpaca_api_secret, paper=True)
 
 
 def get_yahoo_stock_data(stock: str, period: str, verbose=True):
@@ -277,7 +291,7 @@ def generate_buy_decision(stock_df: pd.DataFrame, trade_signal_col_name: str, ve
 
 def rolling_predictor_auto_tuner(joined_df_dict: dict, train_df_dict: dict, test_df_dict: dict, holdout_df_dict: dict,\
     sma_window_list: list, trend_analysis_window_list: list, quantified_trend_window_list: list,\
-    cutoff_threshold_list: list, random_state = 1, verbose=True):
+    cutoff_threshold_list: list, random_state = 1, verbose=True, ticker: str='BTC-USD'):
     '''
     Automatically rolls through the data, training, testing, and predicting on holdout sets
     If you use the input lists you can set it to optimize alpha on every test period and use those...
@@ -557,7 +571,7 @@ def calculate_profit_and_loss(stock_df: pd.DataFrame,  close_col: str, buy_decis
     return stock_df
 
 
-def view_portfolio_df(stock_df: pd.DataFrame, total_portfolio_value_col: str):
+def view_portfolio_df(stock_df: pd.DataFrame, total_portfolio_value_col: str, ticker: str):
     '''
     View the portfolio value over time in a graph
     Args: 
@@ -628,55 +642,157 @@ def view_stock_with_decision(stock_df: pd.DataFrame, ticker: str, close_col: str
 # asset_list = ['BTC-USD', 'ETH-USD', 'BNB-USD', 'XRP-USD', 'ADA-USD', 'SOL-USD', 'DOGE-USD', 'DOT-USD', 'SHIB-USD',\
 #     'MATIC-USD', 'AVAX-USD', 'TRX-USD', 'UNI1-USD', 'LTC-USD', 'CRO-USD', 'ATOM-USD', 'XMR-USD', 'XLM-USD']
 
+def build_model_and_get_decision(ticker: str):
+    #Set ticker 
 
-#Set ticker 
-ticker ='BTC-USD'
+    print('\nGetting data for ' + ticker)
+    historical_data_df = get_yahoo_stock_data(stock = ticker, period='3Y', verbose= True)
+    # historical_data_df = get_stock_data(stock = current_ticker, period='10Y', verbose= False)
 
-print('\nGetting data for ' + ticker)
-historical_data_df = get_yahoo_stock_data(stock = ticker, period='3Y', verbose= True)
-# historical_data_df = get_stock_data(stock = current_ticker, period='10Y', verbose= False)
+    historical_data_df = ta.add_all_ta_features(historical_data_df, open="Open", high="High", low="Low",\
+            close = "Close", volume="Volume", fillna=True)
 
-historical_data_df = ta.add_all_ta_features(historical_data_df, open="Open", high="High", low="Low",\
-        close = "Close", volume="Volume", fillna=True)
+    joined_df_dict, train_df_dict, test_df_dict, holdout_df_dict  = time_series_split(stock_df= historical_data_df, train_days=365, test_days=120, holdout_days=30, verbose=True)
 
-joined_df_dict, train_df_dict, test_df_dict, holdout_df_dict  = time_series_split(stock_df= historical_data_df, train_days=365, test_days=120, holdout_days=30, verbose=True)
+    #Set variables for the auto-tuner and prediction model 
+    sma_window_list = [15]
+    trend_analysis_window_list = [5]
+    quantified_trend_window_list = [3]
+    cutoff_threshold_list = [0.87]
 
-#Set variables for the auto-tuner and prediction model 
-sma_window_list = [15]
-trend_analysis_window_list = [5]
-quantified_trend_window_list = [3]
-cutoff_threshold_list = [0.87]
-
-final_holdout_results_df = rolling_predictor_auto_tuner(joined_df_dict= joined_df_dict, train_df_dict= test_df_dict, test_df_dict= test_df_dict,\
-    holdout_df_dict= holdout_df_dict, \
-    sma_window_list= sma_window_list, trend_analysis_window_list= trend_analysis_window_list, quantified_trend_window_list= quantified_trend_window_list,\
-    cutoff_threshold_list= cutoff_threshold_list, random_state = 1, verbose=True)
-
-
-final_holdout_results_df = calculate_profit_and_loss(stock_df= final_holdout_results_df,  close_col= 'Close', buy_decision_col= 'buy_decision', initial_cash=100000, verbose=True, commission_percent=.0060)
-
-view_portfolio_df(stock_df= final_holdout_results_df, total_portfolio_value_col= 'total_portfolio_value')
-
-view_stock_with_decision(stock_df= final_holdout_results_df, ticker= ticker, close_col= 'Close', buy_decision_col= 'buy_decision')
+    final_holdout_results_df = rolling_predictor_auto_tuner(joined_df_dict= joined_df_dict, train_df_dict= test_df_dict, test_df_dict= test_df_dict,\
+        holdout_df_dict= holdout_df_dict, \
+        sma_window_list= sma_window_list, trend_analysis_window_list= trend_analysis_window_list, quantified_trend_window_list= quantified_trend_window_list,\
+        cutoff_threshold_list= cutoff_threshold_list, random_state = 1, verbose=True, ticker=ticker)
 
 
-#quickly calculate profit but don't save it, just print it 
-starting_asset_value = final_holdout_results_df['Close'].loc[0]
-ending_asset_value = final_holdout_results_df['Close'].loc[len(final_holdout_results_df) - 1]
-baseline_p_and_l =  round(((ending_asset_value - starting_asset_value) / starting_asset_value) * 100, 2)
-starting_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[0]
-ending_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[len(final_holdout_results_df) - 1]
-strategy_p_and_l = round(((ending_portfolio_value - starting_portfolio_value) / starting_portfolio_value) * 100, 2)
-alpha = round(strategy_p_and_l - baseline_p_and_l, 2)
-print('\nStarting Value Asset: {}'.format(starting_asset_value))
-print('Ending Value Asset: {}'.format(ending_asset_value))
-print('Baseline P&L: {}%'.format(baseline_p_and_l))
-print('\nStarting Portfolio Value: {}'.format(starting_portfolio_value))
-print('Ending Portfolio Value: {}'.format(ending_portfolio_value))
-print('STRATEGY P&L: {}%'.format(strategy_p_and_l))
-print('ALPHA: {}%'.format(alpha))
+    final_holdout_results_df = calculate_profit_and_loss(stock_df= final_holdout_results_df,  close_col= 'Close', buy_decision_col= 'buy_decision', initial_cash=100000, verbose=True, commission_percent=.0060)
+
+    # view_portfolio_df(stock_df= final_holdout_results_df, total_portfolio_value_col= 'total_portfolio_value', ticker=ticker)
+
+    # view_stock_with_decision(stock_df= final_holdout_results_df, ticker= ticker, close_col= 'Close', buy_decision_col= 'buy_decision')
 
 
+    #quickly calculate profit but don't save it, just print it 
+    starting_asset_value = final_holdout_results_df['Close'].loc[0]
+    ending_asset_value = final_holdout_results_df['Close'].loc[len(final_holdout_results_df) - 1]
+    baseline_p_and_l =  round(((ending_asset_value - starting_asset_value) / starting_asset_value) * 100, 2)
+    starting_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[0]
+    ending_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[len(final_holdout_results_df) - 1]
+    strategy_p_and_l = round(((ending_portfolio_value - starting_portfolio_value) / starting_portfolio_value) * 100, 2)
+    alpha = round(strategy_p_and_l - baseline_p_and_l, 2)
+    print('\nStarting Value Asset: {}'.format(starting_asset_value))
+    print('Ending Value Asset: {}'.format(ending_asset_value))
+    print('Baseline P&L: {}%'.format(baseline_p_and_l))
+    print('\nStarting Portfolio Value: {}'.format(starting_portfolio_value))
+    print('Ending Portfolio Value: {}'.format(ending_portfolio_value))
+    print('STRATEGY P&L: {}%'.format(strategy_p_and_l))
+    print('ALPHA: {}%'.format(alpha))
+    return final_holdout_results_df
+
+def execute_paper_buy_order(ticker: str='BTC/USD', cash: Double=100):
+    # no keys required
+    quote_client = CryptoHistoricalDataClient()
+
+    # single symbol request
+    request_params = CryptoLatestQuoteRequest(symbol_or_symbols=ticker)
+
+
+    current_ticker_price = quote_client.get_crypto_latest_quote(request_params)[ticker].ask_price
+
+    shares = cash / current_ticker_price
+
+    print('Buying ' + str(shares) + ' shares of ' + ticker)
+
+    # preparing orders
+    market_order_data = MarketOrderRequest(
+                        symbol=ticker,
+                        qty=shares,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.GTC
+                        )
+
+    # Market order
+    market_order = trading_client.submit_order(
+                    order_data=market_order_data
+                )
+
+    print(market_order)
+
+    # params to filter orders by
+    request_params = GetOrdersRequest(
+                        status=OrderStatus.FILLED,
+                        side=OrderSide.BUY
+                    )
+
+    # orders that satisfy params
+    orders = trading_client.get_orders(filter=request_params)
+    print(orders)
+
+def execute_paper_sell_order(ticker: str = 'BTC/USD', shares: Double = .0001):
+    positions = trading_client.get_all_positions()
+
+    shares_to_sell = shares
+
+    for position in positions:
+        if (ticker == 'BTC/USD' and position.symbol == 'BTCUSD'):
+            shares_to_sell = position.qty
+
+    print('Selling ' + shares_to_sell + ' shares of ' + ticker)
+
+    # preparing orders
+    market_order_data = MarketOrderRequest(
+                        symbol=ticker,
+                        qty=shares_to_sell,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC
+                        )
+
+    # Market order
+    market_order = trading_client.submit_order(
+                    order_data=market_order_data
+                )
+
+    print(market_order)
+
+    # params to filter orders by
+    request_params = GetOrdersRequest(
+                        status=OrderStatus.FILLED,
+                        side=OrderSide.SELL
+                    )
+
+    # orders that satisfy params
+    orders = trading_client.get_orders(filter=request_params)
+    print(orders)
+
+def get_available_cash():
+    return trading_client.get_account()
+
+
+def job(ticker: str = 'BTC-USD', cash_ratio: Double = 1000):
+    resulting_df = build_model_and_get_decision(ticker)
+    todays_decision = resulting_df.iloc[-1]
+    buy_decision = todays_decision['buy_decision']
+    print("Today's Date: " + todays_decision['Date'] + "  Buy Decision: " + buy_decision)
+
+    if (buy_decision == 'buy'):
+        cash = get_available_cash()['cash'] / cash_ratio
+
+        execute_paper_buy_order('BTC/USD', cash)
+    
+    elif (buy_decision == 'sell'):
+        execute_paper_sell_order('BTC/USD')
+
+    elif (buy_decision == 'hold'):
+        print('The robot says to hold. We stay strong today.')
+
+    return
+
+
+schedule.every().day.at("19:32").do(job,'BTC-USD',100)
+
+while True:
+    schedule.run_pending()
 
 
 
