@@ -294,7 +294,7 @@ def rolling_predictor_auto_tuner(joined_df_dict: dict, train_df_dict: dict, test
         random_state(int): random state for the XGB model - keep this constant 
         verbose(bool): Choose whether to add prints
     Rtypes: 
-        final_holdout_results_df(pd.Dataframe): df of all the holdout sets joined together 
+        final_holdout_results_df(pd.Dataframe): df with results and all holdout sets joined
     '''
 
     current_iteration = 0
@@ -396,6 +396,7 @@ def rolling_predictor_auto_tuner(joined_df_dict: dict, train_df_dict: dict, test
 
         #Get the best performing settings
         tuning_df = tuning_df.sort_values(by=['alpha','num_trades'], ascending=False).reset_index(drop=True)
+        
         sma_window = tuning_df['sma_window'].loc[0]
         trend_analysis_window = tuning_df['trend_analysis_window'].loc[0]
         quantified_trend_window = tuning_df['quantified_trend_window'].loc[0]
@@ -624,58 +625,53 @@ def view_stock_with_decision(stock_df: pd.DataFrame, ticker: str, close_col: str
 
 
 
-
 # asset_list = ['BTC-USD', 'ETH-USD', 'BNB-USD', 'XRP-USD', 'ADA-USD', 'SOL-USD', 'DOGE-USD', 'DOT-USD', 'SHIB-USD',\
 #     'MATIC-USD', 'AVAX-USD', 'TRX-USD', 'UNI1-USD', 'LTC-USD', 'CRO-USD', 'ATOM-USD', 'XMR-USD', 'XLM-USD']
 
 
 #Set ticker 
+# ticker ='BOIL'
 ticker ='BTC-USD'
 
+
+#Get the data
 print('\nGetting data for ' + ticker)
+# historical_data_df = get_yahoo_stock_data(stock = ticker, period='5Y', verbose= True)
 historical_data_df = get_yahoo_stock_data(stock = ticker, period='3Y', verbose= True)
 # historical_data_df = get_stock_data(stock = current_ticker, period='10Y', verbose= False)
 
+#Add technical analysis features 
 historical_data_df = ta.add_all_ta_features(historical_data_df, open="Open", high="High", low="Low",\
         close = "Close", volume="Volume", fillna=True)
 
+#Best values seem to be 1 year of training, 120 days of testing, 30 days of prediction
 joined_df_dict, train_df_dict, test_df_dict, holdout_df_dict  = time_series_split(stock_df= historical_data_df, train_days=365, test_days=120, holdout_days=30, verbose=True)
 
 #Set variables for the auto-tuner and prediction model 
 sma_window_list = [15]
 trend_analysis_window_list = [5]
 quantified_trend_window_list = [3]
-cutoff_threshold_list = [0.87]
+cutoff_threshold_list = [0.82] #Best value for BTC is 0.82
 
+#Run the entire backtesting algorithm, return the results dataframe
 final_holdout_results_df = rolling_predictor_auto_tuner(joined_df_dict= joined_df_dict, train_df_dict= test_df_dict, test_df_dict= test_df_dict,\
     holdout_df_dict= holdout_df_dict, \
     sma_window_list= sma_window_list, trend_analysis_window_list= trend_analysis_window_list, quantified_trend_window_list= quantified_trend_window_list,\
     cutoff_threshold_list= cutoff_threshold_list, random_state = 1, verbose=True)
 
-
+#Calculate profit and loss 
 final_holdout_results_df = calculate_profit_and_loss(stock_df= final_holdout_results_df,  close_col= 'Close', buy_decision_col= 'buy_decision', initial_cash=100000, verbose=True, commission_percent=.0060)
 
+
+#Graph the portfolio returns 
 view_portfolio_df(stock_df= final_holdout_results_df, total_portfolio_value_col= 'total_portfolio_value')
 
+#Graph the trading decisions
 view_stock_with_decision(stock_df= final_holdout_results_df, ticker= ticker, close_col= 'Close', buy_decision_col= 'buy_decision')
 
 
-#quickly calculate profit but don't save it, just print it 
-starting_asset_value = final_holdout_results_df['Close'].loc[0]
-ending_asset_value = final_holdout_results_df['Close'].loc[len(final_holdout_results_df) - 1]
-baseline_p_and_l =  round(((ending_asset_value - starting_asset_value) / starting_asset_value) * 100, 2)
-starting_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[0]
-ending_portfolio_value = final_holdout_results_df['total_portfolio_value'].loc[len(final_holdout_results_df) - 1]
-strategy_p_and_l = round(((ending_portfolio_value - starting_portfolio_value) / starting_portfolio_value) * 100, 2)
-alpha = round(strategy_p_and_l - baseline_p_and_l, 2)
-print('\nStarting Value Asset: {}'.format(starting_asset_value))
-print('Ending Value Asset: {}'.format(ending_asset_value))
-print('Baseline P&L: {}%'.format(baseline_p_and_l))
-print('\nStarting Portfolio Value: {}'.format(starting_portfolio_value))
-print('Ending Portfolio Value: {}'.format(ending_portfolio_value))
-print('STRATEGY P&L: {}%'.format(strategy_p_and_l))
-print('ALPHA: {}%'.format(alpha))
-
+#Get today's prediction 
+today_prediction = final_holdout_results_df['buy_decision'].loc[len(final_holdout_results_df)-1]
 
 
 
