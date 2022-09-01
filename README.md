@@ -2,7 +2,7 @@
 `export ALPACA_KEY='<key id>'`
 `export ALPACA_SECRET='<secret key>'`
 
-*Once environment variables have been set, use the following command to execute nohup continuously:
+* Once environment variables have been set, use the following command to execute nohup continuously:
 `nohup python3 -u main.py &`
 You'll then see a 'nohup.out' file created in the directory that will continously print the output of the script
 
