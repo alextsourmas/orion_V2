@@ -10,7 +10,7 @@ You'll then see a 'nohup.out' file created in the directory that will continousl
 * If for any reason you need to kill the nohup process from running, first do:
 `lsof nohup.out`
 to identify the PID running the nohup process, then 
-`kill -9 <PID`
+`kill -9 <PID>`
 to kill it. You'll see a message from nohup indicating it's been killed
 
 * **NOTE**: You can set the 'cash_ratio' to determine the amount of available funds to use for a purchase. It defaults to 1000 and is currently set to 100 on `main.py:792: schedule.every().day.at("19:32").do(job,'BTC-USD',100)`.
